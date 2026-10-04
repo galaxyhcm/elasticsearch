@@ -3953,6 +3953,12 @@ public class EsqlCapabilities {
         PROMQL_LIMITK,
 
         /**
+         * PromQL's translator truncates fractional k for topk, bottomk and limitk rather than rounding it.
+         * These PromQL reductions are lowered together, rather than registered as ES|QL functions.
+         */
+        FIX_PROMQL_FRACTIONAL_K_TRUNCATION,
+
+        /**
          * Support for PromQL {@code histogram_fraction()} on native histograms.
          */
         PROMQL_HISTOGRAM_FRACTION,

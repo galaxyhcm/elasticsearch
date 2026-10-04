@@ -490,6 +490,7 @@ public final class TranslatePromqlToEsqlPlan extends AnalyzerRules.Parameterized
             }
             var order = (Order) reduction.buildEsqlFunction(table.value(), promqlContext);
             // Prometheus converts k with an integer cast: `topk(1.5, v)` keeps one series, and a k below one keeps none.
+            // https://github.com/prometheus/prometheus/blob/8be3a9560fbdd18a94dedec4b747c35178177202/promql/engine.go#L3327-L3339
             Expression k = new ToInteger(reduction.source(), new Floor(reduction.source(), reduction.parameters().getFirst()));
             return new TopNBy(reduction.source(), plan, order != null ? List.of(order) : List.of(), k, groupings);
         }
