@@ -9,21 +9,23 @@ package org.elasticsearch.xpack.esql.plan.logical.promql;
 
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * The existing label requirements and available columns, shared by parent and child translations.
- * Labels required by name, optionally together with packed columns each excluding a set of names.
- * This is a selection, not an inventory of storage projections: combining requirements only combines
- * their label names and exclusion sets, without creating physical record projections.
+ * The label requirement a parent translation places on a child: the promoted labels it requires by name, each its own
+ * column, and optionally the time-series metadata - every other label, encoded in a {@code _timeseries} column -
+ * once per exclusion set. This is strictly a top-down propagation mechanism: a parent passes a requirement down and then
+ * reads whatever it needs off the child plan's output.
+ * It is a selection, not an inventory of storage projections: combining requirements only combines
+ * their label names and exclusion sets, without creating physical record projections. The metadata may overlap the
+ * promoted names.
  *
- * @param labels concrete label reads
- * @param skips exclusion sets, one per packed column
+ * @param labels promoted label reads
+ * @param skips exclusion sets of the metadata, one per {@code _timeseries} column
  */
 public record TranslationConstraint(Set<String> labels, Set<Set<String>> skips) {
-    /** No columns: a scalar's constraint, and the identity of {@link #union}. */
+    /** No columns: a scalar's constraint, and the identity of {@link #newConstraintUnion}. */
     public static final TranslationConstraint EMPTY = new TranslationConstraint(Set.of(), Set.of());
 
     public TranslationConstraint {
@@ -35,23 +37,23 @@ public record TranslationConstraint(Set<String> labels, Set<Set<String>> skips) 
         skips = Collections.unmodifiableSet(copy);
     }
 
-    /** Exactly these labels, each as its own column. */
-    public static TranslationConstraint finite(Collection<String> names) {
+    /** Exactly these labels, promoted: each its own column. */
+    public static TranslationConstraint newConstraintWithPromoted(Collection<String> names) {
         return new TranslationConstraint(new LinkedHashSet<>(names), Set.of());
     }
 
-    /** Every runtime label except {@code skip}, as packed columns; an empty skip set is the full label space. */
-    public static TranslationConstraint open(Collection<String> skip) {
+    /** The metadata with {@code skip} unset, encoded in a {@code _timeseries} column; with nothing unset, the whole metadata. */
+    public static TranslationConstraint newConstraintUnset(Collection<String> skip) {
         return new TranslationConstraint(Set.of(), Set.of(new LinkedHashSet<>(skip)));
     }
 
-    /** Every runtime label **/
-    public static TranslationConstraint open() {
-        return open(Set.of());
+    /** The whole metadata, nothing unset: every label, encoded in the {@code _timeseries} column. */
+    public static TranslationConstraint newConstraintUnset() {
+        return newConstraintUnset(Set.of());
     }
 
-    /** Merge two constraints: labels and skip sets combined. */
-    public static TranslationConstraint union(TranslationConstraint a, TranslationConstraint b) {
+    /** Merge two constraints: promoted labels and metadata exclusion sets combined. */
+    public static TranslationConstraint newConstraintUnion(TranslationConstraint a, TranslationConstraint b) {
         var mergedLabels = new LinkedHashSet<>(a.labels);
         mergedLabels.addAll(b.labels);
         var mergedSkips = new LinkedHashSet<>(a.skips);
@@ -60,10 +62,10 @@ public record TranslationConstraint(Set<String> labels, Set<Set<String>> skips) 
     }
 
     /**
-     * A constraint transposed below a node that drops {@code keys}: the dropped labels are no longer available as
-     * columns, and every packed column must already exclude them to survive the regroup.
+     * A constraint transposed below a node that drops {@code keys}: the dropped labels are no longer promoted, and every
+     * metadata {@code _timeseries} column must already exclude them to survive the regroup.
      */
-    public static TranslationConstraint subtract(TranslationConstraint constraint, Collection<String> keys) {
+    public static TranslationConstraint newConstraintSub(TranslationConstraint constraint, Collection<String> keys) {
         var remaining = new LinkedHashSet<>(constraint.labels);
         remaining.removeAll(keys);
         var widened = new LinkedHashSet<Set<String>>();
@@ -76,10 +78,10 @@ public record TranslationConstraint(Set<String> labels, Set<Set<String>> skips) 
     }
 
     /**
-     * The columns of a constraint that survive a node dropping {@code keys}: labels outside the set and packed
-     * columns already excluding all of it. The upward counterpart of {@link #subtract}.
+     * The columns of a constraint that survive a node dropping {@code keys}: promoted labels outside the set and the
+     * metadata {@code _timeseries} columns already excluding all of it. The upward counterpart of {@link #newConstraintSub}.
      */
-    public static TranslationConstraint intersect(TranslationConstraint constraint, Collection<String> keys) {
+    public static TranslationConstraint newConstraintIntersect(TranslationConstraint constraint, Collection<String> keys) {
         var remaining = new LinkedHashSet<>(constraint.labels);
         remaining.removeAll(keys);
         var covering = new LinkedHashSet<Set<String>>();
@@ -91,20 +93,15 @@ public record TranslationConstraint(Set<String> labels, Set<Set<String>> skips) 
         return new TranslationConstraint(remaining, covering);
     }
 
-    /** Only the labels among {@code names}; packed columns unchanged. Trims what a child exposes to what is required. */
-    public static TranslationConstraint project(TranslationConstraint constraint, Collection<String> names) {
+    /** Only the promoted labels among {@code names}; the metadata unchanged. Trims what a child exposes to what is required. */
+    public static TranslationConstraint newConstraintProject(TranslationConstraint constraint, Collection<String> names) {
         var retained = new LinkedHashSet<>(constraint.labels);
         retained.retainAll(names);
         return new TranslationConstraint(retained, constraint.skips);
     }
 
-    /** The smallest skip set: the packed column fixing this table's grain; null when the table is unpacked. */
-    public Set<String> finestSkip() {
-        return skips.stream().min(Comparator.comparingInt(Set::size)).orElse(null);
-    }
-
-    /** True when this constraint carries at least one packed column. */
-    public boolean isOpen() {
+    /** True when this constraint carries metadata, in at least one {@code _timeseries} column. */
+    public boolean hasMetadata() {
         return skips.isEmpty() == false;
     }
 }
